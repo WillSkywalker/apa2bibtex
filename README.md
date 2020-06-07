@@ -1,2 +1,2 @@
-# nextf1race
-A command tool to show where and when the next Formula 1 race is.
+# apa2bibtex
+A command tool to covert APA references to BibTeX format.
