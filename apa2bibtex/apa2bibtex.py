@@ -1,125 +1,97 @@
 #!/usr/bin/env python
 # -_- coding: utf-8 -_-
 
-import os.path
+import warnings
 import sys
-import json
-import datetime
-import argparse
+import random
+from time import sleep
 
-NOW = datetime.datetime.utcnow()
-TIMELAG = datetime.datetime.now() - NOW
-# UTCNOW = datetime.datetime.utcnow()
-MONTHS = ('Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sept', 'Oct', 'Nov', 'Dec')
-DATAPATH = os.path.abspath(os.path.join(os.path.realpath(__file__), '../../race_data/'))
+import requests
+from bs4 import BeautifulSoup
 
 
-class NextF1Race(object):
-
-    def __init__(self, calendar_file=DATAPATH+'/%d.json' % NOW.year, 
-                 next_year_calendar_file = DATAPATH+'/%d.json' % (NOW.year + 1), 
-                 circuit_file=DATAPATH+'/circuits.json'):
-        super(NextF1Race, self).__init__()
-        with open(calendar_file) as fnow,\
-             open(next_year_calendar_file) as fnext,\
-             open(circuit_file) as fcircuit:
-            self.this_year = json.load(fnow)
-            self.next_year = json.load(fnext)
-            self.circuits = json.load(fcircuit)
-        self.calendar = self.this_year + self.next_year[:1]
+class NotFoundOnGoogleScholarError(Exception):
+    pass
 
 
-    def next_race(self):
-        NOW = datetime.datetime.utcnow()
-        for race in self.calendar:
-            circuit = self.circuits[race['circuit']]
-            race_time = list(map(int, circuit['time']['Race'].split(':')))
-            race_date = datetime.datetime(NOW.year, race['date'][0], race['date'][1], 
-                                          race_time[0], race_time[1])
-            if race_date > NOW:
-                next = race
-                next['gap'] = race_date - NOW
-                break
-        else:
-            next = self.calendar[-1]
-            circuit = self.circuits[next['circuit']]
-            race_time = list(map(int, circuit['time']['Race'].split(':')))
-            next['gap'] = datetime.datetime(NOW.year+1, race['date'][0], 
-                race['date'][1], race_time[0], race_time[1]) - NOW
-        next['circuit'] = self.circuits[next['circuit']]
-        return next
+class APA2BibTeX(object):
 
+    def __init__(self, lines):
+        self.lines = [line.strip() for line in lines if line.strip()]
+        self.s = requests.session()
+        agents = ['Mozilla/5.0 (Linux; Android 8.0.0; SM-G960F Build/R16NW) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/62.0.3202.84 Mobile Safari/537.36',
+                  'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_14_6) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/83.0.4103.61 Safari/537.36',
+                  'Mozilla/5.0 (Linux; Android 6.0.1; Nexus 6P Build/MMB29P) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/47.0.2526.83 Mobile Safari/537.36',
+                  'Mozilla/5.0 (iPhone; CPU iPhone OS 12_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/12.0 Mobile/15E148 Safari/604.1',
+                  'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/42.0.2311.135 Safari/537.36 Edge/12.246']
 
-def format_timedelta(timedelta):
-    hours, seconds = divmod(timedelta.seconds, 3600)
-    minutes, seconds = divmod(seconds, 60)
-    timestr = 'In '
+        self.s.headers.update({'user-agent': random.choice(agents),
+                               'referer': 'https://scholar.google.com/',
+                               'sec-fetch-dest': 'document',
+                               'sec-fetch-mode': 'navigate',
+                               'sec-fetch-site': 'same-origin',
+                               'sec-fetch-user': '?1',
+                               'upgrade-insecure-requests': '1',
+                               'accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.9',
+                               'accept-encoding': 'gzip, deflate, br',
+                               'accept-language': 'en-US,en;q=0.9,zh-CN;q=0.8,zh;q=0.7,es;q=0.6,zh-TW;q=0.5',
+                               'cache-control': 'no-cache'})
 
-    def add_part(name, num):
-        s = ''
-        if num:
-            if num == 1:
-                s += '1 %s ' % name
+    def get_bibtex(self, line):
+        r = self.s.get('https://scholar.google.com/scholar', params={'q': line, 'hl': 'en', 'btnG': '', 'as_sdt': '0,5'})
+        soup = BeautifulSoup(r.text, 'html.parser')
+        d = soup.find('div', {'class': 'gs_r gs_or gs_scl'})
+        try:
+            q = 'info:' + d.attrs['data-cid'] + ':scholar.google.com/'
+        except AttributeError:
+            print(soup)
+            raise NotFoundOnGoogleScholarError
+        sleep(random.uniform(1, 3))
+        nr = self.s.get('https://scholar.google.com/scholar', params={'q': q, 'output': 'cite', 'scirp': 0, 'hl': 'en'})
+        soup = BeautifulSoup(nr.text, 'html.parser')
+
+        try:
+            url = soup.find('a', string='BibTeX').attrs['href']
+        except AttributeError:
+            warnings.warn('Hit by anti-crawler policy. Trying again in 10 seconds...')
+            sleep(10)
+            nr = self.s.get('https://scholar.google.com/scholar', params={'q': q, 'output': 'cite', 'scirp': 0, 'hl': 'en'})
+            soup = BeautifulSoup(nr.text, 'html.parser')
+            a = soup.find('a', string='BibTeX')
+            if a:
+                url = soup.find('a', string='BibTeX').attrs['href']
             else:
-                s += '%d %ss ' % (num, name)
-        return s
+                raise NotFoundOnGoogleScholarError
 
-    timestr += add_part('day', timedelta.days)
-    timestr += add_part('hour', hours)
-    timestr += add_part('minute', minutes)
-    timestr += add_part('second', seconds)
+        sleep(random.uniform(0.5, 2))
+        nr = self.s.get(url)
+        return nr.text.encode('utf-8')
 
-    return timestr.strip()
+    def convert(self):
+        self.cites = []
+        self.errors = []
+        for line in self.lines:
+            try:
+                bib = self.get_bibtex(line)
+                self.cites.append(bib)
+                sleep(random.uniform(1, 5))
+            except NotFoundOnGoogleScholarError:
+                self.errors.append(line)
 
-
-def print_time(times, lag=TIMELAG, is_monaco=False):
-    for i in times:
-        t = datetime.datetime.strptime(times[i], '%H:%M') + lag
-        times[i] = datetime.datetime.strftime(t, '%H:%M')
-    if is_monaco:
-        print("Practice 1: " + times['Practice 1'] + ' Thursday')
-        print("Practice 2: " + times['Practice 2'] + ' Thursday')
-    else:
-        print("Practice 1: " + times['Practice 1'] + ' Friday')
-        print("Practice 2: " + times['Practice 2'] + ' Friday')
-    print("Practice 3: " + times['Practice 3'] + ' Saturday')
-    print("Qualifying: " + times['Qualifying'] + ' Saturday')
-    print("      Race: " + times['Race'] + ' Sunday')
+    def output(self):
+        for err in self.errors:
+            warnings.warn('No citation found for line "%s"' % err)
+        for cite in self.cites:
+            print(cite)
 
 
 def main():
-    parser = argparse.ArgumentParser(description='What\'s the next Formula 1 race?')
-    parser.add_argument('-d', '--detailed', action='store_true')
-    parser.add_argument('-s', '--simplified', action='store_true')
-    args = vars(parser.parse_args())
-
-    n = NextF1Race()
-    next_race = n.next_race()
-    timestr = format_timedelta(next_race['gap'])
-
-
-    print('Next race: %s Grand Prix, on %s %2d' % (next_race['country'], 
-        MONTHS[next_race['date'][0]-1], next_race['date'][1]))
-    print(timestr)
-
-    if not args['simplified']:
-        print('')
-        print_time(next_race['circuit']['time'])
-
-
-    if args['detailed']:
-        print('')
-        c = next_race['circuit']
-        print(c['description'].strip())
-        print('')
-        print('First Grand Prix: %s' % c['First Grand Prix'])
-        print('Circuit Length: %s' % c['Circuit Length'])
-        print('Race Distance: %s' % c['Race Distance'])
-        print('Lap Record: %s' % c['Lap Record'])
-        print('Number of Laps: %s' % c['Number of Laps'])
-
-
+    lines = []
+    for line in sys.stdin:
+        lines.append(line)
+    a = APA2BibTeX(lines)
+    a.convert()
+    a.output()
 
 if __name__ == '__main__':
     main()
-

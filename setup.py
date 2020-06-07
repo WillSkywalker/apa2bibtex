@@ -23,7 +23,10 @@ setup(
             'apa2bibtex = apa2bibtex.apa2bibtex:main',
         ],
     },
-
+    install_requires=[
+        'bs4',
+        'requests',
+    ],
 
     # could also include long_description, download_url, classifiers, etc.
     classifiers=[
